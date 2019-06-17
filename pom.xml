@@ -723,6 +723,12 @@
                 <version>1.2</version>
             </dependency>
 
+            <dependency>
+                <groupId>so.dian.mofa3</groupId>
+                <artifactId>mofa-nacos-config-security-starter</artifactId>
+                <version>1.0-SNAPSHOT</version>
+            </dependency>
+
 
         </dependencies>
     </dependencyManagement>

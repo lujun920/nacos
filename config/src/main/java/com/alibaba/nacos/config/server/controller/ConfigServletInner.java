@@ -23,10 +23,18 @@ import com.alibaba.nacos.config.server.service.DiskUtil;
 import com.alibaba.nacos.config.server.service.LongPollingService;
 import com.alibaba.nacos.config.server.service.PersistService;
 import com.alibaba.nacos.config.server.service.trace.ConfigTraceService;
-import com.alibaba.nacos.config.server.utils.*;
+import com.alibaba.nacos.config.server.utils.GroupKey2;
+import com.alibaba.nacos.config.server.utils.LogUtil;
+import com.alibaba.nacos.config.server.utils.MD5Util;
+import com.alibaba.nacos.config.server.utils.PropertyUtil;
+import com.alibaba.nacos.config.server.utils.Protocol;
+import com.alibaba.nacos.config.server.utils.RequestUtil;
+import com.alibaba.nacos.config.server.utils.TimeUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import so.dian.mofa3.security.service.EncryptDecryptService;
+import so.dian.mofa3.security.yaml.PropertiesToYamlConvert;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
@@ -38,11 +46,13 @@ import java.io.PrintWriter;
 import java.net.URLEncoder;
 import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 
-import static com.alibaba.nacos.core.utils.SystemUtils.STANDALONE_MODE;
 import static com.alibaba.nacos.config.server.utils.LogUtil.pullLog;
+import static com.alibaba.nacos.core.utils.SystemUtils.STANDALONE_MODE;
 
 /**
  * ConfigServlet inner for aop
@@ -235,8 +245,35 @@ public class ConfigServletInner {
                 }
 
                 if (STANDALONE_MODE && !PropertyUtil.isStandaloneUseMysql()) {
-                    out = response.getWriter();
-                    out.print(configInfoBase.getContent());
+
+                    if (configInfoBase.getDataId().indexOf(YAML_SUFFIX) > 0 ||
+                        configInfoBase.getDataId().indexOf(YML_SUFFIX) > 0) {
+                        Properties dumpProperties = encryptDecryptService.decrypt(configInfoBase.getDataId(), configInfoBase.getContent());
+                        String dump = PropertiesToYamlConvert.convertDump(dumpProperties);
+                        out = response.getWriter();
+                        out.print(dump);
+                        // properties 文件
+                    } else if (configInfoBase.getDataId().indexOf(PROPERTIES_SUFFIX) > 0) {
+                        Properties dumpProperties = encryptDecryptService.decrypt(configInfoBase.getDataId(), configInfoBase.getContent());
+                        StringBuilder buff = new StringBuilder();
+                        Enumeration enum1 = dumpProperties.propertyNames();
+                        while (enum1.hasMoreElements()) {
+                            String strKey = (String) enum1.nextElement();
+                            String strValue = dumpProperties.getProperty(strKey);
+                            buff.append(strKey).append("=").append(strValue).append("\n");
+                        }
+
+                        out = response.getWriter();
+                        out.print(buff.toString());
+                        // 其他类型文件，不做处理
+                    } else {
+                        out = response.getWriter();
+                        out.print(configInfoBase.getContent());
+                    }
+
+
+//                    out = response.getWriter();
+//                    out.print(configInfoBase.getContent());
                     out.flush();
                     out.close();
                 } else {
@@ -282,6 +319,15 @@ public class ConfigServletInner {
 
         return HttpServletResponse.SC_OK + "";
     }
+
+    private static final String YAML_SUFFIX = ".yaml";
+    private static final String YML_SUFFIX = ".yml";
+    private static final String PROPERTIES_SUFFIX = ".properties";
+
+
+    @Autowired
+    private EncryptDecryptService encryptDecryptService;
+
 
     private static void releaseConfigReadLock(String groupKey) {
         ConfigService.releaseReadLock(groupKey);

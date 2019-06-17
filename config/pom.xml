@@ -147,6 +147,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
+
+        <dependency>
+            <groupId>so.dian.mofa3</groupId>
+            <artifactId>mofa-nacos-config-security-starter</artifactId>
+        </dependency>
     </dependencies>
     <build>
         <plugins>
