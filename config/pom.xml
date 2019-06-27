@@ -149,9 +149,14 @@
         </dependency>
 
         <dependency>
-            <groupId>so.dian.mofa3</groupId>
-            <artifactId>mofa-nacos-config-security-starter</artifactId>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-rsa</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+        </dependency>
+
     </dependencies>
     <build>
         <plugins>

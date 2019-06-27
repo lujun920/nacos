@@ -110,6 +110,14 @@ public class Constants {
     public static final String COMMUNICATION_CONTROLLER_PATH = BASE_PATH + "/communication";
 
     public static final String CONFIG_CONTROLLER_PATH = BASE_PATH + "/configs";
+    /**
+     * 加密
+     */
+    public static final String ENCRYPT_CONTROLLER_PATH = BASE_PATH + "/encrypt";
+    /**
+     * 解密
+     */
+    public static final String DECRYPT_CONTROLLER_PATH = BASE_PATH + "/decrypt";
 
     public static final String HEALTH_CONTROLLER_PATH = BASE_PATH + "/health";
 
@@ -213,4 +221,39 @@ public class Constants {
     public static final String ACL_RESPONSE = "ACL-Response";
 
     public static final int ATOMIC_MAX_SIZE = 1000;
+
+    /**
+     * 内容不适用，密文无法正常解密返回该值
+     */
+    public static final String NOT_APPLICABLE = "<N/A>";
+
+    /**
+     * 配置密文约定前缀
+     */
+    public static final String PREFIX_CIPHER = "{cipher}";
+
+    /**
+     * 加号
+     */
+    public static final String PLUS = "+";
+
+    /**
+     * 空格符号
+     */
+    public static final String BLANK = " ";
+
+    /**
+     * 等号
+     */
+    public static final String EQUAL = "=";
+
+    /**
+     * 左闭区间
+     */
+    public static final String RANGE_INCLUDE_LEFT = "[";
+
+    /**
+     * 右闭区间
+     */
+    public static final String RANGE_INCLUDE_RIGHT = "]";
 }

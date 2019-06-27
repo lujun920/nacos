@@ -16,6 +16,7 @@
 package com.alibaba.nacos.config.server.controller;
 
 import com.alibaba.nacos.config.server.constant.Constants;
+import com.alibaba.nacos.config.server.factory.YamlPropertySourceFactory;
 import com.alibaba.nacos.config.server.model.CacheItem;
 import com.alibaba.nacos.config.server.model.ConfigInfoBase;
 import com.alibaba.nacos.config.server.service.ConfigService;
@@ -23,6 +24,7 @@ import com.alibaba.nacos.config.server.service.DiskUtil;
 import com.alibaba.nacos.config.server.service.LongPollingService;
 import com.alibaba.nacos.config.server.service.PersistService;
 import com.alibaba.nacos.config.server.service.trace.ConfigTraceService;
+import com.alibaba.nacos.config.server.model.NacosPropertySource;
 import com.alibaba.nacos.config.server.utils.GroupKey2;
 import com.alibaba.nacos.config.server.utils.LogUtil;
 import com.alibaba.nacos.config.server.utils.MD5Util;
@@ -32,9 +34,14 @@ import com.alibaba.nacos.config.server.utils.RequestUtil;
 import com.alibaba.nacos.config.server.utils.TimeUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.PropertySource;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.support.DefaultPropertySourceFactory;
+import org.springframework.core.io.support.EncodedResource;
+import org.springframework.core.io.support.PropertySourceFactory;
+import org.springframework.security.crypto.encrypt.TextEncryptor;
 import org.springframework.stereotype.Service;
-import so.dian.mofa3.security.service.EncryptDecryptService;
-import so.dian.mofa3.security.yaml.PropertiesToYamlConvert;
+import org.yaml.snakeyaml.Yaml;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
@@ -46,10 +53,12 @@ import java.io.PrintWriter;
 import java.net.URLEncoder;
 import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
-import java.util.Enumeration;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
+import java.util.TreeMap;
 
 import static com.alibaba.nacos.config.server.utils.LogUtil.pullLog;
 import static com.alibaba.nacos.core.utils.SystemUtils.STANDALONE_MODE;
@@ -71,6 +80,8 @@ public class ConfigServletInner {
     private static final int TRY_GET_LOCK_TIMES = 9;
 
     private static final int START_LONGPOLLING_VERSION_NUM = 204;
+
+    private static final String ENCODING_UTF8="UTF-8";
 
     /**
      * 轮询接口
@@ -243,37 +254,31 @@ public class ConfigServletInner {
                     fis = new FileInputStream(file);
                     response.setDateHeader("Last-Modified", file.lastModified());
                 }
-
                 if (STANDALONE_MODE && !PropertyUtil.isStandaloneUseMysql()) {
-
-                    if (configInfoBase.getDataId().indexOf(YAML_SUFFIX) > 0 ||
-                        configInfoBase.getDataId().indexOf(YML_SUFFIX) > 0) {
-                        Properties dumpProperties = encryptDecryptService.decrypt(configInfoBase.getDataId(), configInfoBase.getContent());
-                        String dump = PropertiesToYamlConvert.convertDump(dumpProperties);
-                        out = response.getWriter();
-                        out.print(dump);
-                        // properties 文件
-                    } else if (configInfoBase.getDataId().indexOf(PROPERTIES_SUFFIX) > 0) {
-                        Properties dumpProperties = encryptDecryptService.decrypt(configInfoBase.getDataId(), configInfoBase.getContent());
-                        StringBuilder buff = new StringBuilder();
-                        Enumeration enum1 = dumpProperties.propertyNames();
-                        while (enum1.hasMoreElements()) {
-                            String strKey = (String) enum1.nextElement();
-                            String strValue = dumpProperties.getProperty(strKey);
-                            buff.append(strKey).append("=").append(strValue).append("\n");
+                    out = response.getWriter();
+                    // 配置内容不包含需要解密的内容，直接返回
+                    if(configInfoBase.getContent().contains(Constants.PREFIX_CIPHER)){
+                        PropertySource<?> propertySource = null;
+                        // yaml yml配置文件
+                        if (configInfoBase.getDataId().indexOf(YAML_SUFFIX) > 0 ||
+                            configInfoBase.getDataId().indexOf(YML_SUFFIX) > 0) {
+                            propertySource = YAML_SOURCE_FACTORY.createPropertySource(configInfoBase.getDataId(),
+                                new EncodedResource(new ByteArrayResource(configInfoBase.getContent().getBytes()), Constants.ENCODE));
+                            // 数据转换
+                            Map<String, Object> map = convertToMap(propertySource);
+                            out.print(new Yaml().dumpAsMap(map));
+                        // properties文件
+                        } else if (configInfoBase.getDataId().indexOf(PROPERTIES_SUFFIX) > 0) {
+                            propertySource = PROPERTIES_SOURCE_FACTORY.createPropertySource(configInfoBase.getDataId(),
+                                new EncodedResource(new ByteArrayResource(configInfoBase.getContent().getBytes()), Constants.ENCODE));
+                            // 数据转换
+                            Map<String, Object> map = convertToProperties(propertySource);
+                            out.print(getPropertiesString(map));
                         }
-
-                        out = response.getWriter();
-                        out.print(buff.toString());
-                        // 其他类型文件，不做处理
-                    } else {
-                        out = response.getWriter();
+                    }else{
                         out.print(configInfoBase.getContent());
                     }
 
-
-//                    out = response.getWriter();
-//                    out.print(configInfoBase.getContent());
                     out.flush();
                     out.close();
                 } else {
@@ -320,13 +325,266 @@ public class ConfigServletInner {
         return HttpServletResponse.SC_OK + "";
     }
 
+    /** =========================================================================================== **/
+
+    private static final PropertySourceFactory PROPERTIES_SOURCE_FACTORY = new DefaultPropertySourceFactory();
+    private static final PropertySourceFactory YAML_SOURCE_FACTORY = new YamlPropertySourceFactory();
+    @Autowired
+    private TextEncryptor encryptor;
+
+    private String getPropertiesString(Map<String, Object> properties) {
+        StringBuilder output = new StringBuilder();
+        for (Map.Entry<String, Object> entry : properties.entrySet()) {
+            if (output.length() > 0) {
+                output.append("\n");
+            }
+            String line = entry.getKey() + ": " + entry.getValue();
+            output.append(line);
+        }
+        return output.toString();
+    }
+
+    private Map<String, Object> convertToMap(PropertySource<?> propertySource) {
+        // First use the current convertToProperties to get a flat Map from the environment
+        Map<String, Object> properties = convertToProperties(propertySource);
+        // The root map which holds all the first level properties
+        Map<String, Object> rootMap = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : properties.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            PropertyNavigator nav = new PropertyNavigator(key);
+            nav.setMapValue(rootMap, value);
+        }
+        return rootMap;
+    }
+
+
+    private NacosPropertySource convert(PropertySource<?> propertySource){
+        return new NacosPropertySource(propertySource.getName(), (Map<?, ?>) propertySource.getSource());
+    }
+
+
+    private Map<String, Object> convertToProperties(PropertySource<?> propertySource) {
+        // Map of unique keys containing full map of properties for each unique
+        // key
+        Map<String, Map<String, Object>> map = new LinkedHashMap<>();
+        Map<String, Object> combinedMap = new TreeMap<>();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> mapSource = (Map<String, Object>) convert(propertySource).getSource();
+        for (Map.Entry<String, Object> entry : mapSource.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            if(value.toString().startsWith(Constants.PREFIX_CIPHER)){
+                String cipher = value.toString().substring(Constants.PREFIX_CIPHER.length());
+                try {
+                    value = encryptor.decrypt(cipher);
+                } catch (Exception e) {
+                    value = Constants.NOT_APPLICABLE;
+                    String message = "Cannot decrypt key: " + key + " (" + e.getClass()
+                        + ": " + e.getMessage() + ")";
+                    LogUtil.pullCheckLog.warn(message, e);
+                }
+            }
+            if (!key.contains(Constants.RANGE_INCLUDE_LEFT)) {
+                // Not an array, add unique key to the map
+                combinedMap.put(key, value);
+            } else {
+                // An existing array might have already been added to the property map
+                // of an unequal size to the current array. Replace the array key in
+                // the current map.
+                key = key.substring(0, key.indexOf(Constants.RANGE_INCLUDE_LEFT));
+                Map<String, Object> filtered = new TreeMap<>();
+                for (String index : mapSource.keySet()) {
+                    if (index.startsWith(key + Constants.RANGE_INCLUDE_LEFT)) {
+                        filtered.put(index, mapSource.get(index));
+                    }
+                }
+                map.put(key, filtered);
+            }
+        }
+        // Combine all unique keys for array values into the combined map
+        for (Map.Entry<String, Map<String, Object>> entry : map.entrySet()) {
+            combinedMap.putAll(entry.getValue());
+        }
+        postProcessProperties(combinedMap);
+        return combinedMap;
+    }
+
+    private void postProcessProperties(Map<String, Object> propertiesMap) {
+        for (Iterator<String> iter = propertiesMap.keySet().iterator(); iter.hasNext(); ) {
+            String key = iter.next();
+            if ("spring.profiles".equals(key)) {
+                iter.remove();
+            }
+        }
+    }
+
+
+
+
+    /**
+     * Class {@code PropertyNavigator} is used to navigate through the property key and create necessary Maps and Lists
+     * making up the nested structure to finally set the property value at the leaf node.
+     * <p>
+     * The following rules in yml/json are implemented:
+     * <pre>
+     * 1. an array element can be:
+     *    - a value (leaf)
+     *    - a map
+     *    - a nested array
+     * 2. a map value can be:
+     *    - a value (leaf)
+     *    - a nested map
+     *    - an array
+     * </pre>
+     */
+    private static class PropertyNavigator {
+
+        private enum NodeType {
+            /**
+             * leaf
+             */
+            LEAF,
+            /**
+             * map
+             */
+            MAP,
+            /**
+             * arrays
+             */
+            ARRAY
+        }
+
+        private final String propertyKey;
+        private int currentPos;
+        private NodeType valueType;
+
+        private PropertyNavigator(String propertyKey) {
+            this.propertyKey = propertyKey;
+            currentPos = -1;
+            valueType = NodeType.MAP;
+        }
+
+        private void setMapValue(Map<String, Object> map, Object value) {
+            String key = getKey();
+            if (NodeType.MAP.equals(valueType)) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> nestedMap = (Map<String, Object>) map.get(key);
+                if (nestedMap == null) {
+                    nestedMap = new LinkedHashMap<>();
+                    map.put(key, nestedMap);
+                }
+                setMapValue(nestedMap, value);
+            } else if (NodeType.ARRAY.equals(valueType)) {
+                @SuppressWarnings("unchecked")
+                List<Object> list = (List<Object>) map.get(key);
+                if (list == null) {
+                    list = new ArrayList<>();
+                    map.put(key, list);
+                }
+                setListValue(list, value);
+            } else {
+                map.put(key, value);
+            }
+        }
+
+        private void setListValue(List<Object> list, Object value) {
+            int index = getIndex();
+            // Fill missing elements if needed
+            while (list.size() <= index) {
+                list.add(null);
+            }
+            if (NodeType.MAP.equals(valueType)) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> map = (Map<String, Object>) list.get(index);
+                if (map == null) {
+                    map = new LinkedHashMap<>();
+                    list.set(index, map);
+                }
+                setMapValue(map, value);
+            } else if (NodeType.ARRAY.equals(valueType)) {
+                @SuppressWarnings("unchecked")
+                List<Object> nestedList = (List<Object>) list.get(index);
+                if (nestedList == null) {
+                    nestedList = new ArrayList<>();
+                    list.set(index, nestedList);
+                }
+                setListValue(nestedList, value);
+            } else {
+                list.set(index, value);
+            }
+        }
+
+        private int getIndex() {
+            // Consider [
+            int start = currentPos + 1;
+
+            for (int i = start; i < propertyKey.length(); i++) {
+                char c = propertyKey.charAt(i);
+                if (c == ']') {
+                    currentPos = i;
+                    break;
+                } else if (!Character.isDigit(c)) {
+                    throw new IllegalArgumentException("Invalid key: " + propertyKey);
+                }
+            }
+            // If no closing ] or if '[]'
+            if (currentPos < start || currentPos == start) {
+                throw new IllegalArgumentException("Invalid key: " + propertyKey);
+            } else {
+                int index = Integer.parseInt(propertyKey.substring(start, currentPos));
+                // Skip the closing ]
+                currentPos++;
+                if (currentPos == propertyKey.length()) {
+                    valueType = NodeType.LEAF;
+                } else {
+                    switch (propertyKey.charAt(currentPos)) {
+                        case '.':
+                            valueType = NodeType.MAP;
+                            break;
+                        case '[':
+                            valueType = NodeType.ARRAY;
+                            break;
+                        default:
+                            throw new IllegalArgumentException("Invalid key: " + propertyKey);
+                    }
+                }
+                return index;
+            }
+        }
+
+        private String getKey() {
+            // Consider initial value or previous char '.' or '['
+            int start = currentPos + 1;
+            for (int i = start; i < propertyKey.length(); i++) {
+                char currentChar = propertyKey.charAt(i);
+                if (currentChar == '.') {
+                    valueType = NodeType.MAP;
+                    currentPos = i;
+                    break;
+                } else if (currentChar == '[') {
+                    valueType = NodeType.ARRAY;
+                    currentPos = i;
+                    break;
+                }
+            }
+            // If there's no delimiter then it's a key of a leaf
+            if (currentPos < start) {
+                currentPos = propertyKey.length();
+                valueType = NodeType.LEAF;
+                // Else if we encounter '..' or '.[' or start of the property is . or [ then it's invalid
+            } else if (currentPos == start) {
+                throw new IllegalArgumentException("Invalid key: " + propertyKey);
+            }
+            return propertyKey.substring(start, currentPos);
+        }
+    }
+
     private static final String YAML_SUFFIX = ".yaml";
     private static final String YML_SUFFIX = ".yml";
     private static final String PROPERTIES_SUFFIX = ".properties";
 
-
-    @Autowired
-    private EncryptDecryptService encryptDecryptService;
+    /** =========================================================================================== **/
 
 
     private static void releaseConfigReadLock(String groupKey) {
