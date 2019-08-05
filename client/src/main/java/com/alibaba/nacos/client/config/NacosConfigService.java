@@ -72,6 +72,11 @@ public class NacosConfigService implements ConfigService {
     private String encode;
     private ConfigFilterChainManager configFilterChainManager = new ConfigFilterChainManager();
 
+    /**
+     * 初始化
+     * @param properties
+     * @throws NacosException
+     */
     public NacosConfigService(Properties properties) throws NacosException {
         String encodeTmp = properties.getProperty(PropertyKeyConst.ENCODE);
         if (StringUtils.isBlank(encodeTmp)) {
